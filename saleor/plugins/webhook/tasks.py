@@ -4,13 +4,15 @@ from dataclasses import dataclass
 from enum import Enum
 from json import JSONDecodeError
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple, Type
-from urllib.parse import urlparse, urlunparse
+from urllib.parse import unquote, urlparse, urlunparse
 
 import boto3
 import requests
 from botocore.exceptions import ClientError
-from celery.exceptions import MaxRetriesExceededError
+from celery import group
+from celery.exceptions import MaxRetriesExceededError, Retry
 from celery.utils.log import get_task_logger
+from django.conf import settings
 from google.cloud import pubsub_v1
 from requests.exceptions import RequestException
 
@@ -20,12 +22,14 @@ from ...core.models import EventDelivery, EventPayload
 from ...core.tracing import webhooks_opentracing_trace
 from ...graphql.webhook.subscription_payload import (
     generate_payload_from_subscription,
-    initialize_context,
+    initialize_request,
 )
 from ...payment import PaymentError
 from ...settings import WEBHOOK_SYNC_TIMEOUT, WEBHOOK_TIMEOUT
 from ...site.models import Site
-from ...webhook.event_types import SUBSCRIBABLE_EVENTS
+from ...webhook import observability
+from ...webhook.event_types import SUBSCRIBABLE_EVENTS, WebhookEventAsyncType
+from ...webhook.observability import WebhookData
 from ...webhook.utils import get_webhooks_for_event
 from . import signature_for_payload
 from .utils import (
@@ -80,8 +84,6 @@ def create_deliveries_for_subscriptions(
         )
         return []
 
-    context = initialize_context(requestor)
-
     event_payloads = []
     event_deliveries = []
     for webhook in webhooks:
@@ -89,7 +91,7 @@ def create_deliveries_for_subscriptions(
             event_type=event_type,
             subscribable_object=subscribable_object,
             subscription_query=webhook.subscription_query,
-            context=context,
+            request=initialize_request(requestor),
             app=webhook.app,
         )
         if not data:
@@ -226,7 +228,9 @@ def send_webhook_using_aws_sqs(target_url, message, domain, signature, event_typ
         "sqs",
         region_name=region,
         aws_access_key_id=parts.username,
-        aws_secret_access_key=parts.password,
+        aws_secret_access_key=(
+            unquote(parts.password) if parts.password else parts.password
+        ),
     )
     queue_url = urlunparse(
         ("https", parts.hostname, parts.path, parts.params, parts.query, parts.fragment)
@@ -352,6 +356,10 @@ def send_webhook_request_async(self, event_delivery_id):
             try:
                 countdown = self.retry_backoff * (2**self.request.retries)
                 self.retry(countdown=countdown, **self.retry_kwargs)
+            except Retry as retry_error:
+                next_retry = observability.task_next_retry_date(retry_error)
+                observability.report_event_delivery_attempt(attempt, next_retry)
+                raise retry_error
             except MaxRetriesExceededError:
                 task_logger.warning(
                     "[Webhook ID: %r] Failed request to %r: exceeded retry limit."
@@ -374,6 +382,7 @@ def send_webhook_request_async(self, event_delivery_id):
         response = WebhookResponse(content=str(e), status=EventDeliveryStatus.FAILED)
         attempt_update(attempt, response)
         delivery_update(delivery=delivery, status=EventDeliveryStatus.FAILED)
+    observability.report_event_delivery_attempt(attempt)
     clear_successful_delivery(delivery)
 
 
@@ -448,73 +457,85 @@ def send_webhook_request_sync(
 
     attempt_update(attempt, response)
     delivery_update(delivery, response.status)
+    observability.report_event_delivery_attempt(attempt)
     clear_successful_delivery(delivery)
 
     return response_data if response.status == EventDeliveryStatus.SUCCESS else None
 
 
-# DEPRECATED
-# to be removed in task: #1q2x7xw
-@app.task(compression="zlib")
-def trigger_webhooks_for_event(event_type, data):
-    """Send a webhook request for an event as an async task."""
-    webhooks = get_webhooks_for_event(event_type)
+def send_observability_events(webhooks: List[WebhookData], events: List[Any]):
+    event_type = WebhookEventAsyncType.OBSERVABILITY
     for webhook in webhooks:
-        send_webhook_request.delay(
-            webhook.app.name,
-            webhook.pk,
-            webhook.target_url,
-            webhook.secret_key,
-            event_type,
-            data,
-        )
-
-
-# to be removed in task: #1q2x7xw
-@app.task(
-    bind=True,
-    retry_backoff=10,
-    retry_kwargs={"max_retries": 5},
-    compression="zlib",
-)
-def send_webhook_request(
-    self, app_name, webhook_id, target_url, secret, event_type, data
-):
-    parts = urlparse(target_url)
-    domain = Site.objects.get_current().domain
-    message = data.encode("utf-8")
-    signature = signature_for_payload(message, secret)
-
-    scheme_matrix = {
-        WebhookSchemes.HTTP: (send_webhook_using_http, RequestException),
-        WebhookSchemes.HTTPS: (send_webhook_using_http, RequestException),
-        WebhookSchemes.AWS_SQS: (send_webhook_using_aws_sqs, ClientError),
-        WebhookSchemes.GOOGLE_CLOUD_PUBSUB: (
-            send_webhook_using_google_cloud_pubsub,
-            pubsub_v1.publisher.exceptions.MessageTooLargeError,
-        ),
-    }
-
-    if methods := scheme_matrix.get(parts.scheme.lower()):
-        send_method, send_exception = methods
+        scheme = urlparse(webhook.target_url).scheme.lower()
+        failed = 0
         try:
-            with webhooks_opentracing_trace(event_type, domain, app_name=app_name):
-                send_method(target_url, message, domain, signature, event_type)
-        except send_exception as e:
-            task_logger.info("[Webhook] Failed request to %r: %r.", target_url, e)
-            try:
-                countdown = self.retry_backoff * (2**self.request.retries)
-                self.retry(countdown=countdown, **self.retry_kwargs)
-            except MaxRetriesExceededError:
-                task_logger.warning(
-                    "[Webhook] Failed request to %r: exceeded retry limit.",
-                    target_url,
+            if scheme in [WebhookSchemes.AWS_SQS, WebhookSchemes.GOOGLE_CLOUD_PUBSUB]:
+                for event in events:
+                    response = send_webhook_using_scheme_method(
+                        webhook.target_url,
+                        webhook.saleor_domain,
+                        webhook.secret_key,
+                        event_type,
+                        observability.dump_payload(event),
+                    )
+                    if response.status == EventDeliveryStatus.FAILED:
+                        failed += 1
+            else:
+                response = send_webhook_using_scheme_method(
+                    webhook.target_url,
+                    webhook.saleor_domain,
+                    webhook.secret_key,
+                    event_type,
+                    observability.dump_payload(events),
                 )
-        task_logger.info(
-            "[Webhook ID:%r] Payload sent to %r for event %r",
-            webhook_id,
-            target_url,
-            event_type,
+                if response.status == EventDeliveryStatus.FAILED:
+                    failed = len(events)
+        except ValueError:
+            logger.error(
+                "[Observability] Webhook ID: %r unknown webhook scheme: %r",
+                webhook.id,
+                scheme,
+            )
+            continue
+        if failed:
+            logger.warning(
+                "[Observability] Webhook ID: %r failed request to %r "
+                "(%s/%s events dropped): %r.",
+                webhook.id,
+                webhook.target_url,
+                failed,
+                len(events),
+                response.content,
+            )
+            continue
+        logger.debug(
+            "[Observability] Successful delivered %s events to %r.",
+            len(events),
+            webhook.target_url,
         )
-    else:
-        raise ValueError("Unknown webhook scheme: %r" % (parts.scheme,))
+
+
+@app.task
+def observability_send_events():
+    with observability.opentracing_trace("send_events_task", "task"):
+        if webhooks := observability.get_webhooks():
+            with observability.opentracing_trace("pop_events", "buffer"):
+                events, _ = observability.pop_events_with_remaining_size()
+            if events:
+                with observability.opentracing_trace("send_events", "webhooks"):
+                    send_observability_events(webhooks, events)
+
+
+@app.task
+def observability_reporter_task():
+    with observability.opentracing_trace("reporter_task", "task"):
+        if webhooks := observability.get_webhooks():
+            with observability.opentracing_trace("pop_events", "buffer"):
+                events, batch_count = observability.pop_events_with_remaining_size()
+            if batch_count > 0:
+                tasks = [observability_send_events.s() for _ in range(batch_count)]
+                expiration = settings.OBSERVABILITY_REPORT_PERIOD.total_seconds()
+                group(tasks).apply_async(expires=expiration)
+            if events:
+                with observability.opentracing_trace("send_events", "webhooks"):
+                    send_observability_events(webhooks, events)

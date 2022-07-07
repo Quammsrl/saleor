@@ -1,17 +1,24 @@
 from typing import Any, Dict, Optional
 
 from celery.utils.log import get_task_logger
-from django.core.handlers.base import BaseHandler
+from django.conf import settings
+from django.contrib.sites.models import Site
+from django.core.exceptions import ValidationError
 from django.http import HttpRequest
-from django.test.client import RequestFactory
+from django.utils import timezone
 from django.utils.functional import SimpleLazyObject
 from graphql import GraphQLDocument, get_default_backend, parse
-from graphql.error import GraphQLSyntaxError
+from graphql.error import GraphQLError, GraphQLSyntaxError
 from graphql.language.ast import FragmentDefinition, OperationDefinition
 from promise import Promise
 
 from ...app.models import App
+from ...core.exceptions import PermissionDenied
+from ...discount.utils import fetch_discounts
+from ...plugins.manager import PluginsManager
 from ...settings import get_host
+from ...webhook.error_codes import WebhookErrorCode
+from ..utils import format_error
 
 logger = get_task_logger(__name__)
 
@@ -27,6 +34,21 @@ def validate_subscription_query(query: str) -> bool:
     if not check_document_is_single_subscription(document):
         return False
     return True
+
+
+def validate_query(query):
+    if not query:
+        return
+    is_valid = validate_subscription_query(query)
+    if not is_valid:
+        raise ValidationError(
+            {
+                "query": ValidationError(
+                    "Subscription query is not valid",
+                    code=WebhookErrorCode.INVALID.value,
+                )
+            }
+        )
 
 
 def check_document_is_single_subscription(document: GraphQLDocument) -> bool:
@@ -48,28 +70,52 @@ def check_document_is_single_subscription(document: GraphQLDocument) -> bool:
     return len(subscriptions) == 1
 
 
-def initialize_context(requestor=None) -> HttpRequest:
+def initialize_request(requestor=None) -> HttpRequest:
     """Prepare a request object for webhook subscription.
 
-    It creates a dummy request object and initialize middleware on it. It is required
-    to process a request in the same way as API logic does.
+    It creates a dummy request object.
+
     return: HttpRequest
     """
-    handler = BaseHandler()
-    context = RequestFactory().request(SERVER_NAME=SimpleLazyObject(get_host))
-    context.requestor = requestor  # type: ignore
-    handler.load_middleware()
-    response = handler.get_response(context)
-    if not response.status_code == 200:
-        raise Exception("Unable to initialize context for webhook.")
-    return context
+
+    def _get_plugins(requestor_getter):
+        return PluginsManager(settings.PLUGINS, requestor_getter)
+
+    request_time = timezone.now()
+
+    request = HttpRequest()
+    request.path = "/graphql/"
+    request.path_info = "/graphql/"
+    request.method = "GET"
+    request.META = {"SERVER_NAME": SimpleLazyObject(get_host), "SERVER_PORT": "80"}
+    if settings.ENABLE_SSL:
+        request.META["HTTP_X_FORWARDED_PROTO"] = "https"
+        request.META["SERVER_PORT"] = "443"
+
+    request.requestor = requestor  # type: ignore
+    request.request_time = request_time  # type: ignore
+    request.site = SimpleLazyObject(lambda: Site.objects.get_current())  # type: ignore
+    request.discounts = SimpleLazyObject(  # type: ignore
+        lambda: fetch_discounts(request_time)
+    )
+    request.plugins = SimpleLazyObject(lambda: _get_plugins(requestor))  # type: ignore
+
+    return request
+
+
+def get_event_payload(event):
+    # Queries that use dataloaders return Promise object for the "event" field. In that
+    # case, we need to resolve them first.
+    if isinstance(event, Promise):
+        return event.get()
+    return event
 
 
 def generate_payload_from_subscription(
     event_type: str,
     subscribable_object,
     subscription_query: Optional[str],
-    context: HttpRequest,
+    request: HttpRequest,
     app: Optional[App] = None,
 ) -> Optional[Dict[str, Any]]:
     """Generate webhook payload from subscription query.
@@ -77,7 +123,7 @@ def generate_payload_from_subscription(
     It uses a graphql's engine to build payload by using the same logic as response.
     As an input it expects given event type and object and the query which will be
     used to resolve a payload.
-    event_type: is a event which will be triggered.
+    event_type: is an event which will be triggered.
     subscribable_object: is an object which have a dedicated own type in Subscription
     definition.
     subscription_query: query used to prepare a payload via graphql engine.
@@ -99,12 +145,12 @@ def generate_payload_from_subscription(
     )
     app_id = app.pk if app else None
 
-    context.app = app  # type: ignore
+    request.app = app  # type: ignore
 
     results = document.execute(
         allow_subscriptions=True,
         root=(event_type, subscribable_object),
-        context=get_context_value(context),
+        context=get_context_value(request),
     )
     if hasattr(results, "errors"):
         logger.warning(
@@ -113,6 +159,7 @@ def generate_payload_from_subscription(
             extra={"query": subscription_query, "app": app_id},
         )
         return None
+
     payload = []  # type: ignore
     results.subscribe(payload.append)
 
@@ -124,11 +171,12 @@ def generate_payload_from_subscription(
         return None
 
     payload_instance = payload[0]
-    event_payload = payload_instance.data.get("event")
+    event_payload = get_event_payload(payload_instance.data.get("event"))
 
-    # Queries that use dataloaders return Promise object for the "event" field. In that
-    # case, we need to resolve them first.
-    if isinstance(event_payload, Promise):
-        return event_payload.get()
+    if payload_instance.errors:
+        event_payload["errors"] = [
+            format_error(error, (GraphQLError, PermissionDenied))
+            for error in payload_instance.errors
+        ]
 
     return event_payload

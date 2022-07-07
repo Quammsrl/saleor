@@ -36,7 +36,7 @@ from ..warehouse.availability import (
 )
 from ..warehouse.models import Warehouse
 from ..warehouse.reservations import reserve_stocks_and_preorders
-from . import AddressType, calculations
+from . import AddressType, base_calculations, calculations
 from .error_codes import CheckoutErrorCode
 from .fetch import (
     update_checkout_info_delivery_method,
@@ -51,6 +51,7 @@ if TYPE_CHECKING:
     from prices import TaxedMoney
 
     from ..account.models import Address
+    from ..channel.models import Channel
     from ..order.models import Order
     from .fetch import CheckoutInfo, CheckoutLineInfo
 
@@ -324,12 +325,10 @@ def change_shipping_address_in_checkout(
 
 
 def _get_shipping_voucher_discount_for_checkout(
-    manager: PluginsManager,
     voucher: Voucher,
     checkout_info: "CheckoutInfo",
     lines: Iterable["CheckoutLineInfo"],
     address: Optional["Address"],
-    discounts: Optional[Iterable[DiscountInfo]] = None,
 ):
     """Calculate discount value for a voucher of shipping type."""
     if not is_shipping_required(lines):
@@ -346,12 +345,9 @@ def _get_shipping_voucher_discount_for_checkout(
             msg = "This offer is not valid in your country."
             raise NotApplicable(msg)
 
-    shipping_price = calculations.checkout_shipping_price(
-        manager=manager,
-        checkout_info=checkout_info,
-        lines=lines,
-        address=address,
-        discounts=discounts,
+    # the gross is taken, as net and gross are the same for base calculations
+    shipping_price = base_calculations.base_checkout_delivery_price(
+        checkout_info=checkout_info, lines=lines
     ).gross
     return voucher.get_discount_amount_for(shipping_price, checkout_info.channel)
 
@@ -457,17 +453,17 @@ def get_voucher_discount_for_checkout(
     """
     validate_voucher_for_checkout(manager, voucher, checkout_info, lines, discounts)
     if voucher.type == VoucherType.ENTIRE_ORDER:
-        subtotal = calculations.checkout_subtotal(
-            manager=manager,
-            checkout_info=checkout_info,
-            lines=lines,
-            address=address,
-            discounts=discounts,
+        # the gross is taken, as net and gross are the same for base calculations
+        subtotal = base_calculations.base_checkout_lines_total(
+            lines,
+            checkout_info.channel,
+            checkout_info.checkout.currency,
+            discounts,
         ).gross
         return voucher.get_discount_amount_for(subtotal, checkout_info.channel)
     if voucher.type == VoucherType.SHIPPING:
         return _get_shipping_voucher_discount_for_checkout(
-            manager, voucher, checkout_info, lines, address, discounts
+            voucher, checkout_info, lines, address
         )
     if voucher.type == VoucherType.SPECIFIC_PRODUCT:
         # The specific product voucher is propagated on specific line's prices
@@ -537,12 +533,12 @@ def recalculate_checkout_discount(
             remove_voucher_from_checkout(checkout)
             checkout_info.voucher = None
         else:
-            subtotal = calculations.checkout_subtotal(
-                manager=manager,
-                checkout_info=checkout_info,
-                lines=lines,
-                address=address,
-                discounts=discounts,
+            # the gross is taken, as net and gross are the same for base calculations
+            subtotal = base_calculations.base_checkout_lines_total(
+                lines,
+                checkout_info.channel,
+                checkout_info.checkout.currency,
+                discounts,
             ).gross
             checkout.discount = (
                 min(discount, subtotal)
@@ -618,7 +614,7 @@ def add_voucher_code_to_checkout(
         raise ValidationError(
             {
                 "promo_code": ValidationError(
-                    "Voucher is not applicable to that checkout.",
+                    "Voucher is not applicable to this checkout.",
                     code=CheckoutErrorCode.VOUCHER_NOT_APPLICABLE.value,
                 )
             }
@@ -729,7 +725,7 @@ def get_valid_internal_shipping_methods_for_checkout(
 
 def get_valid_collection_points_for_checkout(
     lines: Iterable["CheckoutLineInfo"],
-    country_code: Optional[str] = None,
+    channel_id: int,
     quantity_check: bool = True,
 ):
     """Return a collection of `Warehouse`s that can be used as a collection point.
@@ -738,19 +734,17 @@ def get_valid_collection_points_for_checkout(
     be validated in further steps (checkout completion) in order to raise
     'InsufficientProductStock' error instead of 'InvalidShippingError'.
     """
-
     if not is_shipping_required(lines):
         return []
-    if not country_code:
-        return []
+
     line_ids = [line_info.line.id for line_info in lines]
     lines = CheckoutLine.objects.filter(id__in=line_ids)
 
     return (
-        Warehouse.objects.applicable_for_click_and_collect(lines, country_code)
+        Warehouse.objects.applicable_for_click_and_collect(lines, channel_id)
         if quantity_check
         else Warehouse.objects.applicable_for_click_and_collect_no_quantity_check(
-            lines, country_code
+            lines, channel_id
         )
     )
 

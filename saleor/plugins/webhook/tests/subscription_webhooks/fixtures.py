@@ -21,6 +21,27 @@ def subscription_webhook(webhook_app):
 
 
 @pytest.fixture
+def subscription_address_created_webhook(subscription_webhook):
+    return subscription_webhook(
+        subscription_queries.ADDRESS_CREATED, WebhookEventAsyncType.ADDRESS_CREATED
+    )
+
+
+@pytest.fixture
+def subscription_address_updated_webhook(subscription_webhook):
+    return subscription_webhook(
+        subscription_queries.ADDRESS_UPDATED, WebhookEventAsyncType.ADDRESS_UPDATED
+    )
+
+
+@pytest.fixture
+def subscription_address_deleted_webhook(subscription_webhook):
+    return subscription_webhook(
+        subscription_queries.ADDRESS_DELETED, WebhookEventAsyncType.ADDRESS_DELETED
+    )
+
+
+@pytest.fixture
 def subscription_app_installed_webhook(subscription_webhook):
     return subscription_webhook(
         subscription_queries.APP_INSTALLED, WebhookEventAsyncType.APP_INSTALLED
@@ -46,6 +67,51 @@ def subscription_app_status_changed_webhook(subscription_webhook):
     return subscription_webhook(
         subscription_queries.APP_STATUS_CHANGED,
         WebhookEventAsyncType.APP_STATUS_CHANGED,
+    )
+
+
+@pytest.fixture
+def subscription_attribute_created_webhook(subscription_webhook):
+    return subscription_webhook(
+        subscription_queries.ATTRIBUTE_CREATED, WebhookEventAsyncType.ATTRIBUTE_CREATED
+    )
+
+
+@pytest.fixture
+def subscription_attribute_updated_webhook(subscription_webhook):
+    return subscription_webhook(
+        subscription_queries.ATTRIBUTE_UPDATED, WebhookEventAsyncType.ATTRIBUTE_UPDATED
+    )
+
+
+@pytest.fixture
+def subscription_attribute_deleted_webhook(subscription_webhook):
+    return subscription_webhook(
+        subscription_queries.ATTRIBUTE_DELETED, WebhookEventAsyncType.ATTRIBUTE_DELETED
+    )
+
+
+@pytest.fixture
+def subscription_attribute_value_created_webhook(subscription_webhook):
+    return subscription_webhook(
+        subscription_queries.ATTRIBUTE_VALUE_CREATED,
+        WebhookEventAsyncType.ATTRIBUTE_VALUE_CREATED,
+    )
+
+
+@pytest.fixture
+def subscription_attribute_value_updated_webhook(subscription_webhook):
+    return subscription_webhook(
+        subscription_queries.ATTRIBUTE_VALUE_UPDATED,
+        WebhookEventAsyncType.ATTRIBUTE_VALUE_UPDATED,
+    )
+
+
+@pytest.fixture
+def subscription_attribute_value_deleted_webhook(subscription_webhook):
+    return subscription_webhook(
+        subscription_queries.ATTRIBUTE_VALUE_DELETED,
+        WebhookEventAsyncType.ATTRIBUTE_VALUE_DELETED,
     )
 
 
@@ -418,6 +484,13 @@ def subscription_customer_updated_webhook(subscription_webhook):
 
 
 @pytest.fixture
+def subscription_customer_deleted_webhook(subscription_webhook):
+    return subscription_webhook(
+        subscription_queries.CUSTOMER_DELETED, WebhookEventAsyncType.CUSTOMER_DELETED
+    )
+
+
+@pytest.fixture
 def subscription_collection_created_webhook(subscription_webhook):
     return subscription_webhook(
         subscription_queries.COLLECTION_CREATED,
@@ -479,10 +552,54 @@ def subscription_page_deleted_webhook(subscription_webhook):
 
 
 @pytest.fixture
+def subscription_page_type_created_webhook(subscription_webhook):
+    return subscription_webhook(
+        subscription_queries.PAGE_TYPE_CREATED, WebhookEventAsyncType.PAGE_TYPE_CREATED
+    )
+
+
+@pytest.fixture
+def subscription_page_type_updated_webhook(subscription_webhook):
+    return subscription_webhook(
+        subscription_queries.PAGE_TYPE_UPDATED, WebhookEventAsyncType.PAGE_TYPE_UPDATED
+    )
+
+
+@pytest.fixture
+def subscription_page_type_deleted_webhook(subscription_webhook):
+    return subscription_webhook(
+        subscription_queries.PAGE_TYPE_DELETED, WebhookEventAsyncType.PAGE_TYPE_DELETED
+    )
+
+
+@pytest.fixture
 def subscription_product_created_multiple_events_webhook(subscription_webhook):
     return subscription_webhook(
         subscription_queries.MULTIPLE_EVENTS,
         WebhookEventAsyncType.TRANSLATION_CREATED,
+    )
+
+
+@pytest.fixture
+def subscription_staff_created_webhook(subscription_webhook):
+    return subscription_webhook(
+        subscription_queries.STAFF_CREATED, WebhookEventAsyncType.STAFF_CREATED
+    )
+
+
+@pytest.fixture
+def subscription_staff_updated_webhook(subscription_webhook):
+    return subscription_webhook(
+        subscription_queries.STAFF_UPDATED,
+        WebhookEventAsyncType.STAFF_UPDATED,
+    )
+
+
+@pytest.fixture
+def subscription_staff_deleted_webhook(subscription_webhook):
+    return subscription_webhook(
+        subscription_queries.STAFF_DELETED,
+        WebhookEventAsyncType.STAFF_DELETED,
     )
 
 

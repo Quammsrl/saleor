@@ -1,5 +1,53 @@
 from .....graphql.tests.queries import fragments
 
+ADDRESS_CREATED = (
+    fragments.ADDRESS_DETAILS
+    + """
+    subscription{
+      event{
+        ...on AddressCreated{
+          address{
+            ...AddressDetails
+          }
+        }
+      }
+    }
+"""
+)
+
+
+ADDRESS_UPDATED = (
+    fragments.ADDRESS_DETAILS
+    + """
+    subscription{
+      event{
+        ...on AddressUpdated{
+          address{
+            ...AddressDetails
+          }
+        }
+      }
+    }
+"""
+)
+
+
+ADDRESS_DELETED = (
+    fragments.ADDRESS_DETAILS
+    + """
+    subscription{
+      event{
+        ...on AddressDeleted{
+          address{
+            ...AddressDetails
+          }
+        }
+      }
+    }
+"""
+)
+
+
 APP_INSTALLED = (
     fragments.APP_DETAILS
     + """
@@ -55,6 +103,102 @@ APP_STATUS_CHANGED = (
         ...on AppStatusChanged{
           app{
             ...AppDetails
+          }
+        }
+      }
+    }
+"""
+)
+
+
+ATTRIBUTE_CREATED = (
+    fragments.ATTRIBUTE_DETAILS
+    + """
+    subscription{
+      event{
+        ...on AttributeCreated{
+          attribute{
+            ...AttributeDetails
+          }
+        }
+      }
+    }
+"""
+)
+
+
+ATTRIBUTE_UPDATED = (
+    fragments.ATTRIBUTE_DETAILS
+    + """
+    subscription{
+      event{
+        ...on AttributeUpdated{
+          attribute{
+            ...AttributeDetails
+          }
+        }
+      }
+    }
+"""
+)
+
+
+ATTRIBUTE_DELETED = (
+    fragments.ATTRIBUTE_DETAILS
+    + """
+    subscription{
+      event{
+        ...on AttributeDeleted{
+          attribute{
+            ...AttributeDetails
+          }
+        }
+      }
+    }
+"""
+)
+
+
+ATTRIBUTE_VALUE_CREATED = (
+    fragments.ATTRIBUTE_VALUE_DETAILS
+    + """
+    subscription{
+      event{
+        ...on AttributeValueCreated{
+          attributeValue{
+            ...AttributeValueDetails
+          }
+        }
+      }
+    }
+"""
+)
+
+
+ATTRIBUTE_VALUE_UPDATED = (
+    fragments.ATTRIBUTE_VALUE_DETAILS
+    + """
+    subscription{
+      event{
+        ...on AttributeValueUpdated{
+          attributeValue{
+            ...AttributeValueDetails
+          }
+        }
+      }
+    }
+"""
+)
+
+
+ATTRIBUTE_VALUE_DELETED = (
+    fragments.ATTRIBUTE_VALUE_DETAILS
+    + """
+    subscription{
+      event{
+        ...on AttributeValueDeleted{
+          attributeValue{
+            ...AttributeValueDetails
           }
         }
       }
@@ -402,6 +546,53 @@ SHIPPING_ZONE_DELETED = """
     }
 """
 
+STAFF_CREATED = (
+    fragments.STAFF_DETAILS
+    + """
+    subscription{
+      event{
+        ...on StaffCreated{
+          user{
+            ...StaffDetails
+          }
+        }
+      }
+    }
+"""
+)
+
+STAFF_UPDATED = (
+    fragments.STAFF_DETAILS
+    + """
+    subscription{
+      event{
+        ...on StaffUpdated{
+          user{
+            ...StaffDetails
+          }
+        }
+      }
+    }
+"""
+)
+
+
+STAFF_DELETED = (
+    fragments.STAFF_DETAILS
+    + """
+    subscription{
+      event{
+        ...on StaffDeleted{
+          user{
+            ...StaffDetails
+          }
+        }
+      }
+    }
+"""
+)
+
+
 PRODUCT_UPDATED = """
     subscription{
       event{
@@ -706,6 +897,9 @@ FULFILLMENT_CREATED = (
           fulfillment{
             ...FulfillmentDetails
           }
+          order{
+            id
+          }
         }
       }
     }
@@ -721,6 +915,9 @@ FULFILLMENT_CANCELED = (
           fulfillment{
             ...FulfillmentDetails
           }
+          order{
+            id
+          }
         }
       }
     }
@@ -728,13 +925,13 @@ FULFILLMENT_CANCELED = (
 )
 
 CUSTOMER_CREATED = (
-    fragments.USER_DETAILS
+    fragments.CUSTOMER_DETAILS
     + """
     subscription{
       event{
         ...on CustomerCreated{
           user{
-            ...UserDetails
+            ...CustomerDetails
           }
         }
       }
@@ -743,19 +940,36 @@ CUSTOMER_CREATED = (
 )
 
 CUSTOMER_UPDATED = (
-    fragments.USER_DETAILS
+    fragments.CUSTOMER_DETAILS
     + """
     subscription{
       event{
         ...on CustomerUpdated{
           user{
-            ...UserDetails
+            ...CustomerDetails
           }
         }
       }
     }
 """
 )
+
+
+CUSTOMER_DELETED = (
+    fragments.CUSTOMER_DETAILS
+    + """
+    subscription{
+      event{
+        ...on CustomerDeleted{
+          user{
+            ...CustomerDetails
+          }
+        }
+      }
+    }
+"""
+)
+
 
 COLLECTION_CREATED = (
     fragments.COLLECTION
@@ -771,6 +985,7 @@ COLLECTION_CREATED = (
     }
     """
 )
+
 
 COLLECTION_UPDATED = (
     fragments.COLLECTION
@@ -809,6 +1024,9 @@ CHECKOUT_CREATED = """
         ...on CheckoutCreated{
           checkout{
             id
+            totalPrice{
+                currency
+            }
           }
         }
       }
@@ -871,6 +1089,53 @@ PAGE_DELETED = (
     }
 """
 )
+
+
+PAGE_TYPE_CREATED = (
+    fragments.PAGE_TYPE_DETAILS
+    + """
+    subscription{
+      event{
+        ...on PageTypeCreated{
+          pageType{
+            ...PageTypeDetails
+          }
+        }
+      }
+    }
+"""
+)
+
+PAGE_TYPE_UPDATED = (
+    fragments.PAGE_TYPE_DETAILS
+    + """
+    subscription{
+      event{
+        ...on PageTypeUpdated{
+          pageType{
+            ...PageTypeDetails
+          }
+        }
+      }
+    }
+"""
+)
+
+PAGE_TYPE_DELETED = (
+    fragments.PAGE_TYPE_DETAILS
+    + """
+    subscription{
+      event{
+        ...on PageTypeDeleted{
+          pageType{
+            ...PageTypeDetails
+          }
+        }
+      }
+    }
+"""
+)
+
 
 MULTIPLE_EVENTS = """
 subscription{

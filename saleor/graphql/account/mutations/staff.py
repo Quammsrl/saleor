@@ -3,6 +3,7 @@ from copy import copy
 
 import graphene
 from django.core.exceptions import ValidationError
+from django.db import transaction
 
 from ....account import events as account_events
 from ....account import models, utils
@@ -173,6 +174,10 @@ class CustomerDelete(CustomerDeleteMixin, UserDelete):
         cls.post_process(info)
         return results
 
+    @classmethod
+    def post_save_action(cls, info, instance, cleaned_input):
+        info.context.plugins.customer_deleted(instance)
+
 
 class StaffCreate(ModelMutation):
     class Arguments:
@@ -271,6 +276,10 @@ class StaffCreate(ModelMutation):
         groups = cleaned_data.get("add_groups")
         if groups:
             instance.groups.add(*groups)
+
+    @classmethod
+    def post_save_action(cls, info, instance, cleaned_input):
+        info.context.plugins.staff_created(instance)
 
 
 class StaffUpdate(StaffCreate):
@@ -410,6 +419,10 @@ class StaffUpdate(StaffCreate):
             match_orders_with_new_user(user)
         return response
 
+    @classmethod
+    def post_save_action(cls, info, instance, cleaned_input):
+        info.context.plugins.staff_updated(instance)
+
 
 class StaffDelete(StaffDeleteMixin, UserDelete):
     class Meta:
@@ -434,7 +447,11 @@ class StaffDelete(StaffDeleteMixin, UserDelete):
         # After the instance is deleted, set its ID to the original database's
         # ID so that the success response contains ID of the deleted object.
         instance.id = db_id
-        return cls.success_response(instance)
+
+        response = cls.success_response(instance)
+        info.context.plugins.staff_deleted(instance)
+
+        return response
 
 
 class AddressCreate(ModelMutation):
@@ -474,6 +491,10 @@ class AddressCreate(ModelMutation):
             user.search_document = prepare_user_search_document_value(user)
             user.save(update_fields=["search_document", "updated_at"])
         return response
+
+    @classmethod
+    def post_save_action(cls, info, instance, cleaned_input):
+        transaction.on_commit(lambda: info.context.plugins.address_created(instance))
 
 
 class AddressUpdate(BaseAddressUpdate):

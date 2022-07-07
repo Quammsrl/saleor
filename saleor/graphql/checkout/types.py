@@ -16,7 +16,7 @@ from ...warehouse.reservations import is_reservation_enabled
 from ..account.dataloaders import AddressByIdLoader
 from ..account.utils import check_is_owner_or_has_one_of_perms
 from ..channel import ChannelContext
-from ..channel.dataloaders import ChannelByCheckoutLineIDLoader, ChannelByIdLoader
+from ..channel.dataloaders import ChannelByCheckoutLineIDLoader
 from ..channel.types import Channel
 from ..core.connection import CountableConnection
 from ..core.descriptions import (
@@ -87,9 +87,24 @@ class CheckoutLine(ModelObjectType):
         "saleor.graphql.product.types.ProductVariant", required=True
     )
     quantity = graphene.Int(required=True)
+    unit_price = graphene.Field(
+        TaxedMoney,
+        description="The unit price of the checkout line, with taxes and discounts.",
+        required=True,
+    )
+    undiscounted_unit_price = graphene.Field(
+        Money,
+        description="The unit price of the checkout line, without discounts.",
+        required=True,
+    )
     total_price = graphene.Field(
         TaxedMoney,
         description="The sum of the checkout line price, taxes and discounts.",
+        required=True,
+    )
+    undiscounted_total_price = graphene.Field(
+        Money,
+        description="The sum of the checkout line price, without discounts.",
         required=True,
     )
     requires_shipping = graphene.Boolean(
@@ -99,7 +114,7 @@ class CheckoutLine(ModelObjectType):
 
     class Meta:
         description = "Represents an item in the checkout."
-        interfaces = [graphene.relay.Node]
+        interfaces = [graphene.relay.Node, ObjectWithMetadata]
         model = models.CheckoutLine
 
     @staticmethod
@@ -109,6 +124,116 @@ class CheckoutLine(ModelObjectType):
 
         return Promise.all([variant, channel]).then(
             lambda data: ChannelContext(node=data[0], channel_slug=data[1].slug)
+        )
+
+    @staticmethod
+    def resolve_unit_price(root, info):
+        # Temporary solution in new tax interface introduced in PR#9526
+        # this value will be denormalized and store in checkout line.
+        def with_checkout(checkout):
+            discounts = DiscountsByDateTimeLoader(info.context).load(
+                info.context.request_time
+            )
+            checkout_info = CheckoutInfoByCheckoutTokenLoader(info.context).load(
+                checkout.token
+            )
+            lines = CheckoutLinesInfoByCheckoutTokenLoader(info.context).load(
+                checkout.token
+            )
+
+            def calculate_line_unit_price(data):
+                (
+                    discounts,
+                    checkout_info,
+                    lines,
+                ) = data
+                for line_info in lines:
+                    if line_info.line.pk == root.pk:
+                        address = (
+                            checkout_info.shipping_address
+                            or checkout_info.billing_address
+                        )
+                        return info.context.plugins.calculate_checkout_line_unit_price(
+                            checkout_info=checkout_info,
+                            lines=lines,
+                            checkout_line_info=line_info,
+                            address=address,
+                            discounts=discounts,
+                        ).price_with_discounts
+                return None
+
+            return Promise.all(
+                [
+                    discounts,
+                    checkout_info,
+                    lines,
+                ]
+            ).then(calculate_line_unit_price)
+
+        return (
+            CheckoutByTokenLoader(info.context)
+            .load(root.checkout_id)
+            .then(with_checkout)
+        )
+
+    @staticmethod
+    def resolve_undiscounted_unit_price(root, info):
+        # Temporary solution in new tax interface introduced in PR#9526
+        # this value will be denormalized and store in checkout line.
+        def with_checkout(checkout):
+            discounts = DiscountsByDateTimeLoader(info.context).load(
+                info.context.request_time
+            )
+            checkout_info = CheckoutInfoByCheckoutTokenLoader(info.context).load(
+                checkout.token
+            )
+            lines = CheckoutLinesInfoByCheckoutTokenLoader(info.context).load(
+                checkout.token
+            )
+
+            def calculate_undiscounted_unit_price(data):
+                (
+                    discounts,
+                    checkout_info,
+                    lines,
+                ) = data
+                for line_info in lines:
+                    if line_info.line.pk == root.pk:
+                        address = (
+                            checkout_info.shipping_address
+                            or checkout_info.billing_address
+                        )
+                        include_taxes_in_prices = (
+                            info.context.site.settings.include_taxes_in_prices
+                        )
+                        undiscounted_price = (
+                            info.context.plugins.calculate_checkout_line_unit_price(
+                                checkout_info=checkout_info,
+                                lines=lines,
+                                checkout_line_info=line_info,
+                                address=address,
+                                discounts=discounts,
+                            ).undiscounted_price
+                        )
+                        return (
+                            undiscounted_price.gross
+                            if include_taxes_in_prices
+                            else undiscounted_price.net
+                        )
+                return None
+
+            return Promise.all(
+                [
+                    discounts,
+                    checkout_info,
+                    lines,
+                ]
+            ).then(calculate_undiscounted_unit_price)
+
+        return (
+            CheckoutByTokenLoader(info.context)
+            .load(root.checkout_id)
+            .then(with_checkout)
         )
 
     @staticmethod
@@ -153,6 +278,66 @@ class CheckoutLine(ModelObjectType):
                     lines,
                 ]
             ).then(calculate_line_total_price)
+
+        return (
+            CheckoutByTokenLoader(info.context)
+            .load(root.checkout_id)
+            .then(with_checkout)
+        )
+
+    @staticmethod
+    def resolve_undiscounted_total_price(root, info):
+        # Temporary solution in new tax interface introduced in PR#9526
+        # this value will be denormalized and store in checkout line.
+        def with_checkout(checkout):
+            discounts = DiscountsByDateTimeLoader(info.context).load(
+                info.context.request_time
+            )
+            checkout_info = CheckoutInfoByCheckoutTokenLoader(info.context).load(
+                checkout.token
+            )
+            lines = CheckoutLinesInfoByCheckoutTokenLoader(info.context).load(
+                checkout.token
+            )
+
+            def calculate_undiscounted_total_price(data):
+                (
+                    discounts,
+                    checkout_info,
+                    lines,
+                ) = data
+                for line_info in lines:
+                    if line_info.line.pk == root.pk:
+                        address = (
+                            checkout_info.shipping_address
+                            or checkout_info.billing_address
+                        )
+                        include_taxes_in_prices = (
+                            info.context.site.settings.include_taxes_in_prices
+                        )
+                        undiscounted_price = (
+                            info.context.plugins.calculate_checkout_line_total(
+                                checkout_info=checkout_info,
+                                lines=lines,
+                                checkout_line_info=line_info,
+                                address=address,
+                                discounts=discounts,
+                            ).undiscounted_price
+                        )
+                        return (
+                            undiscounted_price.gross
+                            if include_taxes_in_prices
+                            else undiscounted_price.net
+                        )
+                return None
+
+            return Promise.all(
+                [
+                    discounts,
+                    checkout_info,
+                    lines,
+                ]
+            ).then(calculate_undiscounted_total_price)
 
         return (
             CheckoutByTokenLoader(info.context)
@@ -493,28 +678,13 @@ class Checkout(ModelObjectType):
     @staticmethod
     @traced_resolver
     def resolve_available_collection_points(root: models.Checkout, info):
-        def get_available_collection_points(data):
-            address, lines, channel = data
+        def get_available_collection_points(lines):
+            return get_valid_collection_points_for_checkout(lines, root.channel_id)
 
-            if address:
-                country_code = address.country.code
-            else:
-                country_code = channel.default_country.code
-
-            return get_valid_collection_points_for_checkout(
-                lines, country_code=country_code
-            )
-
-        lines = CheckoutLinesInfoByCheckoutTokenLoader(info.context).load(root.token)
-        channel = ChannelByIdLoader(info.context).load(root.channel_id)
-        address = (
-            AddressByIdLoader(info.context).load(root.shipping_address_id)
-            if root.shipping_address_id
-            else None
-        )
-
-        return Promise.all([address, lines, channel]).then(
-            get_available_collection_points
+        return (
+            CheckoutLinesInfoByCheckoutTokenLoader(info.context)
+            .load(root.token)
+            .then(get_available_collection_points)
         )
 
     @staticmethod

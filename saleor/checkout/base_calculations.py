@@ -7,11 +7,11 @@ manager.
 from decimal import Decimal
 from typing import TYPE_CHECKING, Iterable, Optional
 
-from prices import Money, TaxedMoney
+from prices import TaxedMoney
 
 from ..core.prices import quantize_price
 from ..core.taxes import zero_money, zero_taxed_money
-from ..discount import DiscountInfo
+from ..discount import DiscountInfo, VoucherType
 from ..order.interface import OrderTaxedPricesData
 from .fetch import CheckoutLineInfo, ShippingMethodInfo
 from .interface import CheckoutPricesData, CheckoutTaxedPricesData
@@ -22,23 +22,12 @@ if TYPE_CHECKING:
     from ..order.models import OrderLine
 
 
-def calculate_base_line_unit_price(
+def _calculate_base_line_unit_price(
     line_info: CheckoutLineInfo,
     channel: "Channel",
     discounts: Optional[Iterable[DiscountInfo]] = None,
 ) -> CheckoutPricesData:
-    """Calculate line unit prices including discounts and vouchers.
-
-    Returns a three money values. Undiscounted price, price and price with voucher.
-    Voucher is added to 'price_with_discounts' when line's product matches to products
-    applicable for voucher.
-    For voucher with 'apply once per order', the price will be reduced in calculation
-    of total price.
-    'price' includes discount from sale if any valid exists.
-    'price_with_discounts' includes voucher discount and sale discount if any valid
-    exists.
-    'undiscounted_price' is a price without any sale and voucher.
-    """
+    """Calculate base line unit price without voucher applied once per order."""
     variant = line_info.variant
     variant_price = variant.get_price(
         line_info.product,
@@ -81,6 +70,40 @@ def calculate_base_line_unit_price(
     )
 
 
+def calculate_base_line_unit_price(
+    line_info: CheckoutLineInfo,
+    channel: "Channel",
+    discounts: Optional[Iterable[DiscountInfo]] = None,
+) -> CheckoutPricesData:
+    """Calculate line unit prices including discounts and vouchers.
+
+    Returns a three money values. Undiscounted price, price and price with voucher.
+    Voucher is added to 'price_with_discounts' when line's product matches to products
+    applicable for voucher.
+    For voucher with 'apply once per order', the price will be included in unit price.
+    'price' includes discount from sale if any valid exists.
+    'price_with_discounts' includes voucher discount and sale discount if any valid
+    exists.
+    'undiscounted_price' is a price without any sale and voucher.
+    """
+    prices_data = calculate_base_line_total_price(
+        line_info=line_info, channel=channel, discounts=discounts
+    )
+    quantity = line_info.line.quantity
+    currency = prices_data.price_with_discounts.currency
+    return CheckoutPricesData(
+        undiscounted_price=quantize_price(
+            prices_data.undiscounted_price / quantity, currency
+        ),
+        price_with_sale=quantize_price(
+            prices_data.price_with_sale / quantity, currency
+        ),
+        price_with_discounts=quantize_price(
+            prices_data.price_with_discounts / quantity, currency
+        ),
+    )
+
+
 def calculate_base_line_total_price(
     line_info: CheckoutLineInfo,
     channel: "Channel",
@@ -96,7 +119,7 @@ def calculate_base_line_total_price(
     exists.
     'undiscounted_price' is a price without any sale and voucher.
     """
-    prices_data = calculate_base_line_unit_price(
+    prices_data = _calculate_base_line_unit_price(
         line_info=line_info, channel=channel, discounts=discounts
     )
     if line_info.voucher and line_info.voucher.apply_once_per_order:
@@ -108,7 +131,7 @@ def calculate_base_line_total_price(
             zero_money(prices_data.price_with_sale.currency),
         )
         # we add -1 as we handle a case when voucher is applied only to single line
-        # of the cheapest line
+        # of the cheapest item
         quantity_without_voucher = line_info.line.quantity - 1
         prices_data = CheckoutPricesData(
             price_with_discounts=(
@@ -182,21 +205,44 @@ def calculate_base_price_for_shipping_method(
 
 
 def base_checkout_total(
-    subtotal: TaxedMoney,
-    shipping_price: TaxedMoney,
-    discount: Money,
-    currency: str,
+    checkout_info: "CheckoutInfo",
+    discounts: Iterable[DiscountInfo],
+    lines: Iterable["CheckoutLineInfo"],
 ) -> TaxedMoney:
     """Return the total cost of the checkout."""
-    zero = zero_taxed_money(currency)
-    total = subtotal + shipping_price - discount
+    currency = checkout_info.checkout.currency
+    line_totals = [
+        base_checkout_line_total(
+            line_info,
+            checkout_info.channel,
+            discounts,
+        ).price_with_discounts
+        for line_info in lines
+    ]
+    subtotal = sum(line_totals, zero_taxed_money(currency))
+
+    shipping_price = base_checkout_delivery_price(checkout_info, lines)
+    discount = checkout_info.checkout.discount
+
+    is_shipping_voucher = (
+        checkout_info.voucher.type == VoucherType.SHIPPING
+        if checkout_info.voucher
+        else False
+    )
     # Discount is subtracted from both gross and net values, which may cause negative
     # net value if we are having a discount that covers whole price.
-    # Comparing TaxedMoney objects works only on gross values. That is why we are
-    # explicitly returning zero_taxed_money if total.gross is less or equal zero.
-    if total.gross <= zero.gross:
-        return zero
-    return total
+    if is_shipping_voucher:
+        # we can operate on amount as the base shipping net and gross is the same
+        shipping_price = max(zero_money(currency), shipping_price.gross - discount)
+        shipping_price = TaxedMoney(net=shipping_price, gross=shipping_price)
+    else:
+        subtotal = subtotal - discount
+        # Comparing TaxedMoney objects works only on gross values. That is why we are
+        # explicitly returning zero_taxed_money if total.gross is less or equal zero.
+        zero = zero_taxed_money(currency)
+        if subtotal.gross <= zero.gross:
+            subtotal = zero
+    return subtotal + shipping_price
 
 
 def base_checkout_lines_total(
