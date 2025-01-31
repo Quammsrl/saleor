@@ -8,9 +8,9 @@ RUN apt-get -y update \
   && rm -rf /var/lib/apt/lists/*
 
 # Install Python dependencies
-COPY requirements_dev.txt /app/
+COPY requirements.txt /app/
 WORKDIR /app
-RUN pip install -r requirements_dev.txt
+RUN pip install -r requirements.txt
 
 ### Final image
 FROM python:3.9-slim
@@ -25,9 +25,9 @@ RUN apt-get update \
   libopenjp2-7 \
   libpango-1.0-0 \
   libpangocairo-1.0-0 \
-  libssl1.1 \
-  libtiff5 \
-  libwebp6 \
+  libssl3 \
+  libtiff6 \
+  libwebp7 \
   libxml2 \
   libpq5 \
   shared-mime-info \
@@ -55,14 +55,14 @@ ARG PROJECT_VERSION
 ENV PROJECT_VERSION="${PROJECT_VERSION}"
 
 LABEL org.opencontainers.image.title="mirumee/saleor"                                  \
-      org.opencontainers.image.description="\
-A modular, high performance, headless e-commerce platform built with Python, \
-GraphQL, Django, and ReactJS."                                                         \
-      org.opencontainers.image.url="https://saleor.io/"                                \
-      org.opencontainers.image.source="https://github.com/saleor/saleor"               \
-      org.opencontainers.image.revision="$COMMIT_ID"                                   \
-      org.opencontainers.image.version="$PROJECT_VERSION"                              \
-      org.opencontainers.image.authors="Saleor Commerce (https://saleor.io)"           \
-      org.opencontainers.image.licenses="BSD 3"
+  org.opencontainers.image.description="\
+  A modular, high performance, headless e-commerce platform built with Python, \
+  GraphQL, Django, and ReactJS."                                                         \
+  org.opencontainers.image.url="https://saleor.io/"                                \
+  org.opencontainers.image.source="https://github.com/saleor/saleor"               \
+  org.opencontainers.image.revision="$COMMIT_ID"                                   \
+  org.opencontainers.image.version="$PROJECT_VERSION"                              \
+  org.opencontainers.image.authors="Saleor Commerce (https://saleor.io)"           \
+  org.opencontainers.image.licenses="BSD 3"
 
 CMD ["gunicorn", "--bind", ":8000", "--workers", "4", "--worker-class", "saleor.asgi.gunicorn_worker.UvicornWorker", "saleor.asgi:application"]
